@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
 const PLAZAS_2024 = 343;
-const PLAZAS_2026 = 64;
+const PLAZAS_2026 = 164;
 const PDF_2024_SRC = "lista_prov_baremo_pri_2024.pdf";
 const PDF_2026_SRC = "lista_prov_baremo_pri_2026.pdf";
 const PDF_2024_PUBLIC = "/documents/lista-prov-baremo-pri-2024.pdf";

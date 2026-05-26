@@ -170,10 +170,11 @@ const SEEDS: YearSeed[] = [
     tipo: "oposicion",
     label: "Oposición Maestros",
     plazasPrimaria: 64,
-    plazasPrimariaAmpliadas: null,
+    plazasPrimariaAmpliadas: 164,
     plazasConResultado: null,
     boeRef: "BOE-A-2026-3765",
-    notas: "Baremo provisional mayo 2026. Examen pendiente.",
+    notas:
+      "Convocatoria inicial feb. 2026 (64 PRI). Ampliación tras OPE 2026: 164 PRI (total convocatoria ~785). Baremo provisional mayo 2026.",
   },
 ];
 
