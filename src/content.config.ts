@@ -16,6 +16,7 @@ const baremo = defineCollection({
     dni: z.string(),
     nombre: z.string(),
     total: z.number(),
+    pdfPage: z.number(),
     subscores: subscoreSchema,
   }),
 });

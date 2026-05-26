@@ -1,9 +1,14 @@
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
 const PLAZAS_2024 = 343;
+const PLAZAS_2026 = 164;
+const PDF_2024_SRC = "lista_prov_baremo_pri_2024.pdf";
+const PDF_2026_SRC = "lista_prov_baremo_pri_2026.pdf";
+const PDF_2024_PUBLIC = "/documents/lista-prov-baremo-pri-2024.pdf";
+const PDF_2026_PUBLIC = "/documents/lista-prov-baremo-pri-2026.pdf";
 
 function selectedFinalists(finalists: FinalistRecord[]): FinalistRecord[] {
   return finalists.filter((f): f is FinalistRecord & { order: number } =>
@@ -25,9 +30,17 @@ const SUBSCORE_KEYS_2026 = [
   "3.3.1", "3.3.2", "3.4", "3.5",
 ];
 
+/** 2024 PDF: no column 2.5; formación splits 3.4 into 3.4 / 3.4.1 / 3.4.2. */
 const SUBSCORE_KEYS_2024 = [
-  ...SUBSCORE_KEYS_2026.slice(0, SUBSCORE_KEYS_2026.indexOf("3.4")),
-  "3.4.1", "3.4.2", "3.5",
+  ...SUBSCORE_KEYS_2026.slice(0, SUBSCORE_KEYS_2026.indexOf("2.5")),
+  ...SUBSCORE_KEYS_2026.slice(
+    SUBSCORE_KEYS_2026.indexOf("3"),
+    SUBSCORE_KEYS_2026.indexOf("3.4"),
+  ),
+  "3.4",
+  "3.4.1",
+  "3.4.2",
+  "3.5",
 ];
 
 const SLASH_IDX = new Set([2, 3, 5, 6, 8, 9, 11, 12]);
@@ -40,6 +53,7 @@ export type BaremoRecord = {
   dni: string;
   nombre: string;
   total: number;
+  pdfPage: number;
   subscores: Record<string, Subscore>;
 };
 
@@ -63,6 +77,9 @@ export type RepeaterRecord = {
   gotPlaza2024: boolean;
   finalScore2024: number | null;
   examScore2024: number | null;
+  pdfPage2024: number;
+  categories2024: { servicios: number; meritos: number; formacion: number };
+  categories2026: { servicios: number; meritos: number; formacion: number };
   categoryDelta: { servicios: number; meritos: number; formacion: number };
 };
 
@@ -74,6 +91,8 @@ export type MetaRecord = {
   participants2024: number;
   participants2026: number;
   repeaters: number;
+  baremoPdf2024: string;
+  baremoPdf2026: string;
 };
 
 function parseNum(s: string): number {
@@ -101,16 +120,11 @@ function subscoreValue(v: Subscore): number {
 }
 
 function categoryTotals(subscores: Record<string, Subscore>): { servicios: number; meritos: number; formacion: number } {
-  let servicios = 0;
-  let meritos = 0;
-  let formacion = 0;
-  for (const [k, v] of Object.entries(subscores)) {
-    const n = subscoreValue(v);
-    if (k === "1" || k.startsWith("1.")) servicios += n;
-    else if (k === "2" || k.startsWith("2.")) meritos += n;
-    else if (k === "3" || k.startsWith("3.")) formacion += n;
-  }
-  return { servicios, meritos, formacion };
+  return {
+    servicios: subscoreValue(subscores["1"]),
+    meritos: subscoreValue(subscores["2"]),
+    formacion: subscoreValue(subscores["3"]),
+  };
 }
 
 function rankByTotal(records: BaremoRecord[]): Map<string, number> {
@@ -134,12 +148,14 @@ type BaremoConfig = {
   subscoreKeys: string[];
 };
 
-async function extractLines(pdfPath: string, dniRe: RegExp): Promise<{ type: "start" | "cont"; text: string }[]> {
+type ExtractedLine = { type: "start" | "cont"; text: string; page: number };
+
+async function extractLines(pdfPath: string, dniRe: RegExp): Promise<ExtractedLine[]> {
   const buf = new Uint8Array(await Bun.file(pdfPath).arrayBuffer());
   const doc = await getDocument({ data: buf }).promise;
   console.log(`${pdfPath.split("/").pop()}: ${doc.numPages} pages`);
 
-  const lines: { type: "start" | "cont"; text: string }[] = [];
+  const lines: ExtractedLine[] = [];
   for (let p = 1; p <= doc.numPages; p++) {
     const page = await doc.getPage(p);
     const tc = await page.getTextContent();
@@ -154,8 +170,8 @@ async function extractLines(pdfPath: string, dniRe: RegExp): Promise<{ type: "st
     for (const y of [...byY.keys()].sort((a, b) => b - a)) {
       const text = toLine(byY.get(y)!);
       if (isHeaderOrFooter(text)) continue;
-      if (dniRe.test(text)) lines.push({ type: "start", text });
-      else lines.push({ type: "cont", text });
+      if (dniRe.test(text)) lines.push({ type: "start", text, page: p });
+      else lines.push({ type: "cont", text, page: p });
     }
   }
   return lines;
@@ -213,7 +229,14 @@ async function parseBaremo(config: BaremoConfig): Promise<BaremoRecord[]> {
       }
     }
 
-    records.push({ id: `r${records.length}`, dni, nombre, total, subscores });
+    records.push({
+      id: `r${records.length}`,
+      dni,
+      nombre,
+      total,
+      pdfPage: lines[i].page,
+      subscores,
+    });
   }
 
   console.log(`  parsed ${records.length}, skipped ${skipped}`);
@@ -283,6 +306,9 @@ function buildRepeaters(
       gotPlaza2024: gotPlaza,
       finalScore2024: fin?.finalScore ?? null,
       examScore2024: fin ? fin.finalScore - b24.total : null,
+      pdfPage2024: b24.pdfPage,
+      categories2024: cat24,
+      categories2026: cat26,
       categoryDelta: {
         servicios: cat26.servicios - cat24.servicios,
         meritos: cat26.meritos - cat24.meritos,
@@ -296,15 +322,24 @@ function buildRepeaters(
   return repeaters;
 }
 
+async function publishBaremoPdfs() {
+  const outDir = resolve(ROOT, "public/documents");
+  await mkdir(outDir, { recursive: true });
+  await copyFile(resolve(ROOT, PDF_2024_SRC), resolve(outDir, PDF_2024_PUBLIC.slice("/documents/".length)));
+  await copyFile(resolve(ROOT, PDF_2026_SRC), resolve(outDir, PDF_2026_PUBLIC.slice("/documents/".length)));
+}
+
 async function main() {
+  await publishBaremoPdfs();
+
   const baremo2026 = await parseBaremo({
-    pdf: resolve(ROOT, "lista_prov_baremo_pri_2026.pdf"),
+    pdf: resolve(ROOT, PDF_2026_SRC),
     dniRe: /\*{4}\d+\*/,
     subscoreKeys: SUBSCORE_KEYS_2026,
   });
 
   const baremo2024 = await parseBaremo({
-    pdf: resolve(ROOT, "lista_prov_baremo_pri_2024.pdf"),
+    pdf: resolve(ROOT, PDF_2024_SRC),
     dniRe: /\*{5}\d+/,
     subscoreKeys: SUBSCORE_KEYS_2024,
   });
@@ -324,7 +359,7 @@ async function main() {
 
   const meta: MetaRecord = {
     plazas2024: PLAZAS_2024,
-    plazas2026: 150,
+    plazas2026: PLAZAS_2026,
     cutoffFinal2024:
       cutoffByOrder?.finalScore ??
       Math.min(...selected.map((f) => f.finalScore), Number.POSITIVE_INFINITY),
@@ -332,6 +367,8 @@ async function main() {
     participants2024: baremo2024.length,
     participants2026: baremo2026.length,
     repeaters: repeaters.length,
+    baremoPdf2024: PDF_2024_PUBLIC,
+    baremoPdf2026: PDF_2026_PUBLIC,
   };
 
   const outDir = resolve(ROOT, "src/data");
