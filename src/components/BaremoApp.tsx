@@ -871,7 +871,7 @@ export default function BaremoApp({
           2024. No sustituye al baremo definitivo ni al resultado del examen de
           2026.
         </p>
-        <p>
+        <p className="mt-6">
           Made with &lt;3 by{" "}
           <a
             href="https://x.com/mdemora_dev"
