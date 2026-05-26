@@ -1,8 +1,10 @@
 ---
+import Analytics from "@vercel/analytics/astro";
 import { getCollection } from "astro:content";
 import BaremoApp from "../components/BaremoApp.tsx";
 import repeatersData from "../data/repeaters.json";
 import metaData from "../data/meta.json";
+import { categoryTotalsFromSubscores } from "../lib/stats";
 import "../styles/global.css";
 
 const entries = await getCollection("baremo");
@@ -11,6 +13,8 @@ const rows = entries.map((e) => ({
   dni: e.data.dni,
   nombre: e.data.nombre,
   total: e.data.total,
+  pdfPage: e.data.pdfPage,
+  categories: categoryTotalsFromSubscores(e.data.subscores),
 }));
 ---
 
@@ -24,5 +28,6 @@ const rows = entries.map((e) => ({
   </head>
   <body class="bg-neutral-50 text-neutral-900 min-h-screen antialiased">
     <BaremoApp rows={rows} repeaters={repeatersData} meta={metaData} client:load />
+    <Analytics />
   </body>
 </html>

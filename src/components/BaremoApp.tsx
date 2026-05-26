@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Fuse from "fuse.js";
 import {
   Chart as ChartJS,
@@ -36,7 +36,13 @@ ChartJS.register(
   annotationPlugin,
 );
 
-type Row = { dni: string; nombre: string; total: number };
+type Row = {
+  dni: string;
+  nombre: string;
+  total: number;
+  pdfPage: number;
+  categories: { servicios: number; meritos: number; formacion: number };
+};
 type Ranked = Row & { rank: number; idx: number };
 
 type Repeater = {
@@ -50,6 +56,9 @@ type Repeater = {
   gotPlaza2024: boolean;
   finalScore2024: number | null;
   examScore2024: number | null;
+  pdfPage2024: number;
+  categories2024: { servicios: number; meritos: number; formacion: number };
+  categories2026: { servicios: number; meritos: number; formacion: number };
   categoryDelta: { servicios: number; meritos: number; formacion: number };
 };
 
@@ -61,10 +70,15 @@ type Meta = {
   participants2024: number;
   participants2026: number;
   repeaters: number;
+  baremoPdf2024: string;
+  baremoPdf2026: string;
 };
 
 function stripAccents(s: string): string {
-  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  return s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
 }
 
 function useDebouncedValue<T>(value: T, delayMs: number): T {
@@ -87,7 +101,11 @@ function nameMatchScore(name: string, tokens: string[]): number {
   return score;
 }
 
-function searchByName(ranked: Ranked[], query: string, fuse: Fuse<Ranked>): Ranked[] {
+function searchByName(
+  ranked: Ranked[],
+  query: string,
+  fuse: Fuse<Ranked>,
+): Ranked[] {
   const normalized = stripAccents(query.trim());
   if (!normalized) return [];
 
@@ -113,9 +131,7 @@ function searchByName(ranked: Ranked[], query: string, fuse: Fuse<Ranked>): Rank
 }
 
 function HighlightName({ name, query }: { name: string; query: string }) {
-  const tokens = stripAccents(query.trim())
-    .split(/\s+/)
-    .filter(Boolean);
+  const tokens = stripAccents(query.trim()).split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return <>{name}</>;
 
   const pattern = tokens
@@ -158,7 +174,18 @@ function useIsMobile(breakpoint = 640) {
   return isMobile;
 }
 
-function ProbBar({ value, label }: { value: number; label: string }) {
+function ProbBar({
+  value,
+  label,
+  variant = "simulation",
+}: {
+  value: number;
+  label: string;
+  variant?: "simulation" | "reference";
+}) {
+  const barColor =
+    variant === "simulation" ? "bg-emerald-600" : "bg-sky-600";
+
   return (
     <div>
       <div className="flex justify-between text-sm mb-1">
@@ -167,10 +194,37 @@ function ProbBar({ value, label }: { value: number; label: string }) {
       </div>
       <div className="h-2.5 rounded-full bg-neutral-200 overflow-hidden">
         <div
-          className="h-full rounded-full bg-emerald-600 transition-all duration-500"
+          className={`h-full rounded-full transition-all duration-500 ${barColor}`}
           style={{ width: `${Math.min(value * 100, 100)}%` }}
         />
       </div>
+    </div>
+  );
+}
+
+function ProbBlock({
+  title,
+  badge,
+  description,
+  children,
+}: {
+  title: string;
+  badge: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-neutral-50/60 p-4 space-y-3">
+      <div className="space-y-1.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <h4 className="text-sm font-medium text-neutral-800">{title}</h4>
+          <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-500 ring-1 ring-neutral-200">
+            {badge}
+          </span>
+        </div>
+        <p className="text-xs leading-relaxed text-neutral-500">{description}</p>
+      </div>
+      <div className="space-y-3">{children}</div>
     </div>
   );
 }
@@ -216,12 +270,15 @@ export default function BaremoApp({
   const debouncedQuery = useDebouncedValue(query, 1000);
   const [selected, setSelected] = useState<Ranked | null>(null);
   const [open, setOpen] = useState(false);
-  const [probability, setProbability] = useState<ProbabilityResult | null>(null);
+  const [probability, setProbability] = useState<ProbabilityResult | null>(
+    null,
+  );
   const [probLoading, setProbLoading] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobile();
 
-  const isSearching = query.trim() !== debouncedQuery.trim() && query.trim().length > 0;
+  const isSearching =
+    query.trim() !== debouncedQuery.trim() && query.trim().length > 0;
 
   const matches = useMemo(() => {
     if (!debouncedQuery.trim()) return [];
@@ -230,7 +287,8 @@ export default function BaremoApp({
 
   useEffect(() => {
     const h = (e: PointerEvent) => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+      if (boxRef.current && !boxRef.current.contains(e.target as Node))
+        setOpen(false);
     };
     document.addEventListener("pointerdown", h);
     return () => document.removeEventListener("pointerdown", h);
@@ -238,7 +296,11 @@ export default function BaremoApp({
 
   const selectedRepeater = useMemo(() => {
     if (!selected) return null;
-    return repeaterByDni.get(dniSuffix(selected.dni)) ?? repeaterByName.get(normName(selected.nombre)) ?? null;
+    return (
+      repeaterByDni.get(dniSuffix(selected.dni)) ??
+      repeaterByName.get(normName(selected.nombre)) ??
+      null
+    );
   }, [selected, repeaterByDni, repeaterByName]);
 
   const stats = useMemo(() => {
@@ -292,13 +354,23 @@ export default function BaremoApp({
 
   const histogram = useMemo(() => {
     const min = 0;
-    const max = Math.max(...ranked.map((r) => r.total));
     const binSize = 0.5;
+    const empty = { bins: [] as number[], labels: [] as string[], selectedBinIdx: -1 };
+    if (ranked.length === 0) return empty;
+
+    let max = ranked[0].total;
+    for (let i = 1; i < ranked.length; i++) {
+      if (ranked[i].total > max) max = ranked[i].total;
+    }
+    if (!Number.isFinite(max)) return empty;
+
     const nBins = Math.ceil((max - min) / binSize) + 1;
+    if (!Number.isFinite(nBins) || nBins <= 0) return empty;
+
     const bins = new Array(nBins).fill(0);
     for (const r of ranked) {
       const i = Math.floor((r.total - min) / binSize);
-      bins[i]++;
+      if (i >= 0 && i < nBins) bins[i]++;
     }
     const labels = bins.map((_, i) => formatNum(min + i * binSize, 1));
     let selectedBinIdx = -1;
@@ -306,7 +378,8 @@ export default function BaremoApp({
     return { bins, labels, selectedBinIdx };
   }, [ranked, selected]);
 
-  const rank343Score = ranked[Math.min(meta.plazas2024 - 1, ranked.length - 1)]?.total;
+  const rank2026CutoffScore =
+    ranked[Math.min(meta.plazas2026 - 1, ranked.length - 1)]?.total;
 
   return (
     <div className="mx-auto max-w-6xl px-3 py-5 sm:px-4 sm:py-8 space-y-6 sm:space-y-8">
@@ -315,8 +388,9 @@ export default function BaremoApp({
           Baremo Provisional 2026 · Maestros · Primaria
         </h1>
         <p className="text-xs sm:text-sm text-neutral-600 leading-relaxed">
-          Acceso 1 y 2 (turno libre) · {total.toLocaleString("es-ES")} participantes ·{" "}
-          {meta.plazas2026} plazas · {meta.repeaters.toLocaleString("es-ES")} repetidores con datos 2024
+          Acceso 1 y 2 (turno libre) · {total.toLocaleString("es-ES")}{" "}
+          participantes · {meta.plazas2026} plazas ·{" "}
+          {meta.repeaters.toLocaleString("es-ES")} repetidores con datos 2024
         </p>
       </header>
 
@@ -324,7 +398,9 @@ export default function BaremoApp({
         <div className="flex items-baseline justify-between gap-2 mb-1.5">
           <label className="block text-sm font-medium">Buscar por nombre</label>
           {isSearching && (
-            <span className="text-xs text-neutral-400 animate-pulse">Buscando…</span>
+            <span className="text-xs text-neutral-400 animate-pulse">
+              Buscando…
+            </span>
           )}
           {!isSearching && debouncedQuery.trim() && open && (
             <span className="text-xs text-neutral-500 tabular-nums">
@@ -345,45 +421,52 @@ export default function BaremoApp({
           onKeyDown={(e) => {
             if (e.key === "Escape") setOpen(false);
           }}
-          placeholder="Apellidos, nombre… (p. ej. bellido cristina)"
+          placeholder="Apellidos, nombre… "
           className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2.5 text-base sm:text-sm shadow-sm focus:border-neutral-900 focus:outline-none focus:ring-2 focus:ring-neutral-900/10"
           aria-autocomplete="list"
           aria-expanded={open && (isSearching || matches.length > 0)}
         />
-        {open && debouncedQuery.trim() && !isSearching && matches.length > 0 && (
-          <ul
-            className="absolute z-10 mt-1 max-h-96 w-full overflow-auto rounded-lg border border-neutral-200 bg-white shadow-lg"
-            role="listbox"
-          >
-            {matches.map((m) => (
-              <li
-                key={m.idx}
-                role="option"
-                onPointerDown={(e) => {
-                  e.preventDefault();
-                  setSelected(m);
-                  setQuery(m.nombre);
-                  setOpen(false);
-                }}
-                className="cursor-pointer px-3 py-2.5 text-sm hover:bg-neutral-100 active:bg-neutral-100 border-b border-neutral-50 last:border-b-0"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <span className="font-medium min-w-0 flex-1 leading-snug">
-                    <HighlightName name={m.nombre} query={debouncedQuery} />
-                  </span>
-                  <span className="shrink-0 text-xs sm:text-sm text-neutral-500 tabular-nums">
-                    #{m.rank} · {formatNum(m.total, 4)}
-                  </span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-        {open && debouncedQuery.trim() && !isSearching && matches.length === 0 && (
-          <div className="absolute z-10 mt-1 w-full rounded-lg border border-neutral-200 bg-white px-3 py-4 text-sm text-neutral-500 shadow-lg">
-            No hay coincidencias para «{debouncedQuery.trim()}». Prueba con apellidos o menos palabras.
-          </div>
-        )}
+        {open &&
+          debouncedQuery.trim() &&
+          !isSearching &&
+          matches.length > 0 && (
+            <ul
+              className="absolute z-10 mt-1 max-h-96 w-full overflow-auto rounded-lg border border-neutral-200 bg-white shadow-lg"
+              role="listbox"
+            >
+              {matches.map((m) => (
+                <li
+                  key={m.idx}
+                  role="option"
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    setSelected(m);
+                    setQuery(m.nombre);
+                    setOpen(false);
+                  }}
+                  className="cursor-pointer px-3 py-2.5 text-sm hover:bg-neutral-100 active:bg-neutral-100 border-b border-neutral-50 last:border-b-0"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="font-medium min-w-0 flex-1 leading-snug">
+                      <HighlightName name={m.nombre} query={debouncedQuery} />
+                    </span>
+                    <span className="shrink-0 text-xs sm:text-sm text-neutral-500 tabular-nums">
+                      #{m.rank} · {formatNum(m.total, 4)}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        {open &&
+          debouncedQuery.trim() &&
+          !isSearching &&
+          matches.length === 0 && (
+            <div className="absolute z-10 mt-1 w-full rounded-lg border border-neutral-200 bg-white px-3 py-4 text-sm text-neutral-500 shadow-lg">
+              No hay coincidencias para «{debouncedQuery.trim()}». Prueba con
+              apellidos o menos palabras.
+            </div>
+          )}
       </section>
 
       {selected && stats && (
@@ -393,7 +476,9 @@ export default function BaremoApp({
               <div className="text-xs uppercase tracking-wider text-neutral-500">
                 Resultado seleccionado
               </div>
-              <h2 className="text-lg sm:text-xl font-semibold mt-0.5 break-words">{selected.nombre}</h2>
+              <h2 className="text-lg sm:text-xl font-semibold mt-0.5 break-words">
+                {selected.nombre}
+              </h2>
             </div>
             <div className="sm:text-right shrink-0">
               <div className="text-xs uppercase tracking-wider text-neutral-500">
@@ -407,7 +492,10 @@ export default function BaremoApp({
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 sm:gap-4">
             <Stat label="Puesto 2026" value={`#${selected.rank}`} />
-            <Stat label="Percentil" value={stats.percentile.toFixed(1).replace(".", ",") + "%"} />
+            <Stat
+              label="Percentil"
+              value={stats.percentile.toFixed(1).replace(".", ",") + "%"}
+            />
             <Stat
               label="Mejor que"
               value={stats.betterCount.toLocaleString("es-ES")}
@@ -418,21 +506,45 @@ export default function BaremoApp({
               value={stats.worseCount.toLocaleString("es-ES")}
               sub={`${((stats.worseCount / (total - 1 || 1)) * 100).toFixed(1).replace(".", ",")}%`}
             />
-            <Stat label="Empatados" value={stats.tiedCount.toLocaleString("es-ES")} className="col-span-2 sm:col-span-1" />
+            <Stat
+              label="Empatados"
+              value={stats.tiedCount.toLocaleString("es-ES")}
+              className="col-span-2 sm:col-span-1"
+            />
           </div>
 
-          <div
-            className={`inline-flex items-start sm:items-center gap-2 rounded-full px-3 py-1.5 text-xs sm:text-sm leading-snug ${
-              selected.rank <= meta.plazas2026
-                ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
-                : "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
-            }`}
-          >
-            <span className="size-2 rounded-full bg-current" />
-            {selected.rank <= meta.plazas2026
-              ? `Dentro del corte baremo (#${selected.rank} ≤ ${meta.plazas2026})`
-              : `Fuera del corte baremo (faltan ${selected.rank - meta.plazas2026} puestos)`}
+          <div>
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+              <div className="text-xs uppercase tracking-wider text-neutral-500">
+                Desglose del baremo 2026
+              </div>
+              <PdfSourceLink
+                href={pdfHref(meta.baremoPdf2026, selected.pdfPage)}
+                label="Ver fila en PDF oficial 2026"
+              />
+            </div>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <CategoryScore
+                label="Servicios (antigüedad)"
+                value={selected.categories.servicios}
+              />
+              <CategoryScore
+                label="Méritos"
+                value={selected.categories.meritos}
+              />
+              <CategoryScore
+                label="Formación"
+                value={selected.categories.formacion}
+              />
+            </div>
           </div>
+
+          {selected.rank <= meta.plazas2026 && (
+            <div className="inline-flex items-start sm:items-center gap-2 rounded-full px-3 py-1.5 text-xs sm:text-sm leading-snug bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">
+              <span className="size-2 rounded-full bg-current" />
+              {`Dentro del corte baremo (#${selected.rank} ≤ ${meta.plazas2026})`}
+            </div>
+          )}
         </section>
       )}
 
@@ -442,7 +554,9 @@ export default function BaremoApp({
             <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">
               Repitió oposición
             </span>
-            <h3 className="text-sm font-medium text-blue-900">Evolución 2024 → 2026</h3>
+            <h3 className="text-sm font-medium text-blue-900">
+              Evolución 2024 → 2026
+            </h3>
           </div>
 
           <div className="grid gap-3 sm:gap-4 sm:grid-cols-3">
@@ -465,28 +579,73 @@ export default function BaremoApp({
           </div>
 
           <div>
-            <div className="text-xs uppercase tracking-wider text-neutral-500 mb-2">
-              Desglose de mejora por categoría
+            <div className="text-xs uppercase tracking-wider text-neutral-500 mb-1">
+              Desglose por categoría (2024 → 2026)
             </div>
-            <div className="grid gap-2 sm:grid-cols-3">
-              <CategoryDelta label="Servicios (antigüedad)" delta={selectedRepeater.categoryDelta.servicios} />
-              <CategoryDelta label="Méritos" delta={selectedRepeater.categoryDelta.meritos} />
-              <CategoryDelta label="Formación" delta={selectedRepeater.categoryDelta.formacion} />
+            <p className="mb-2 text-[11px] leading-relaxed text-neutral-400">
+              Desglose extraído del PDF; puede contener errores. Compruébalo
+              en el documento oficial.
+            </p>
+            <div className="overflow-x-auto rounded-lg border border-blue-100 bg-white">
+              <table className="w-full min-w-[20rem] text-xs sm:text-sm">
+                <thead>
+                  <tr className="border-b border-neutral-100 text-left text-neutral-500">
+                    <th className="px-3 py-2 font-medium">Categoría</th>
+                    <th className="px-3 py-2 font-medium text-right">2024</th>
+                    <th className="px-3 py-2 font-medium text-right">2026</th>
+                    <th className="px-3 py-2 font-medium text-right">Δ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <CategoryCompareRow
+                    label="Servicios (antigüedad)"
+                    v2024={selectedRepeater.categories2024.servicios}
+                    v2026={selectedRepeater.categories2026.servicios}
+                  />
+                  <CategoryCompareRow
+                    label="Méritos"
+                    v2024={selectedRepeater.categories2024.meritos}
+                    v2026={selectedRepeater.categories2026.meritos}
+                  />
+                  <CategoryCompareRow
+                    label="Formación"
+                    v2024={selectedRepeater.categories2024.formacion}
+                    v2026={selectedRepeater.categories2026.formacion}
+                  />
+                </tbody>
+              </table>
             </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <PdfSourceLink
+              href={pdfHref(meta.baremoPdf2024, selectedRepeater.pdfPage2024)}
+              label={`PDF baremo 2024 · pág. ${selectedRepeater.pdfPage2024}`}
+            />
+            <PdfSourceLink
+              href={pdfHref(meta.baremoPdf2026, selected.pdfPage)}
+              label={`PDF baremo 2026 · pág. ${selected.pdfPage}`}
+            />
           </div>
 
           <div className="rounded-lg border border-blue-100 bg-white p-4 text-sm">
             {selectedRepeater.gotPlaza2024 ? (
               <p className="text-emerald-700">
                 Obtuvo plaza en 2024 con puntuación final de{" "}
-                <strong>{formatNum(selectedRepeater.finalScore2024!, 4)}</strong>
+                <strong>
+                  {formatNum(selectedRepeater.finalScore2024!, 4)}
+                </strong>
                 {selectedRepeater.examScore2024 != null && (
-                  <> (examen: {formatNum(selectedRepeater.examScore2024, 4)} pts)</>
+                  <>
+                    {" "}
+                    (examen: {formatNum(selectedRepeater.examScore2024, 4)} pts)
+                  </>
                 )}
               </p>
             ) : (
               <p className="text-neutral-700">
-                No obtuvo plaza en 2024 (baremo {formatNum(selectedRepeater.baremo2024, 4)}, puesto #
+                No obtuvo plaza en 2024 (baremo{" "}
+                {formatNum(selectedRepeater.baremo2024, 4)}, puesto #
                 {selectedRepeater.rank2024})
               </p>
             )}
@@ -497,32 +656,59 @@ export default function BaremoApp({
       {selected && (probability || probLoading) && (
         <section className="rounded-xl border border-neutral-200 bg-white p-4 sm:p-6 shadow-sm space-y-4 sm:space-y-5">
           <div>
-            <h3 className="text-sm font-medium text-neutral-800">Estimación de probabilidad de plaza</h3>
+            <h3 className="text-sm font-medium text-neutral-800">
+              Estimación de probabilidad de plaza
+            </h3>
             <p className="mt-1 text-xs text-neutral-500">
-              Modelo Monte Carlo usando la distribución de exámenes de los {meta.plazas2024} seleccionados
-              en 2024. El examen de 2026 es desconocido; esto es una estimación, no una predicción.
+              El examen de 2026 aún no se ha celebrado. Combinamos una
+              simulación con datos históricos para orientar, no para predecir.
             </p>
           </div>
 
           {probLoading || !probability ? (
-            <ProbLoadingSkeleton plazas2026={meta.plazas2026} plazas2024={meta.plazas2024} />
+            <ProbLoadingSkeleton
+              plazas2026={meta.plazas2026}
+              plazas2024={meta.plazas2024}
+            />
           ) : (
             <>
-              <div className="space-y-3">
-                <ProbBar value={probability.p150} label={`Con ${meta.plazas2026} plazas (2026)`} />
-                <ProbBar value={probability.p343} label={`Con ${meta.plazas2024} plazas (como 2024)`} />
-                {probability.empirical != null && (
+              <ProbBlock
+                title="Simulación Monte Carlo"
+                badge="Simulación"
+                description={`4.000 escenarios aleatorios asignando notas de examen sacadas de los ${meta.plazas2024} seleccionados en 2024 a todos los participantes de 2026. Calcula la probabilidad de superar el corte según el número de plazas.`}
+              >
+                <ProbBar
+                  value={probability.p150}
+                  label={`Con ${meta.plazas2026} plazas (2026)`}
+                />
+                <ProbBar
+                  value={probability.p343}
+                  label={`Con ${meta.plazas2024} plazas (como 2024)`}
+                />
+              </ProbBlock>
+
+              {probability.empirical != null && (
+                <ProbBlock
+                  title="Referencia histórica"
+                  badge="Dato real"
+                  description="Porcentaje de repetidores con baremo similar (±0,5 pts) que obtuvieron plaza en 2024. No simula el examen: mira qué pasó en la convocatoria anterior."
+                >
                   <ProbBar
                     value={probability.empirical}
-                    label="Referencia empírica (repetidores con baremo similar en 2024)"
+                    label="Obtuvieron plaza en 2024"
+                    variant="reference"
                   />
-                )}
-              </div>
+                </ProbBlock>
+              )}
 
               <p className="text-xs text-neutral-400">
-                Baremo solo no decide la plaza: en 2024 el corte final fue {formatNum(meta.cutoffFinal2024, 4)} pts
-                (baremo del puesto #150: {rank343Score ? formatNum(rank343Score, 4) : "—"}). Muchos seleccionados
-                tenían baremo bajo pero examen alto.
+                Baremo solo no decide la plaza: en 2024 el corte final fue{" "}
+                {formatNum(meta.cutoffFinal2024, 4)} pts (baremo del puesto
+                #{meta.plazas2026}:{" "}
+                {rank2026CutoffScore
+                  ? formatNum(rank2026CutoffScore, 4)
+                  : "—"}
+                ). Muchos seleccionados tenían baremo bajo pero examen alto.
               </p>
             </>
           )}
@@ -551,11 +737,23 @@ export default function BaremoApp({
               plugins: { legend: { display: false } },
               scales: {
                 x: {
-                  title: { display: true, text: "Puntuación total", font: { size: isMobile ? 10 : 12 } },
-                  ticks: { maxRotation: isMobile ? 45 : 0, autoSkip: true, font: { size: isMobile ? 9 : 11 } },
+                  title: {
+                    display: true,
+                    text: "Puntuación total",
+                    font: { size: isMobile ? 10 : 12 },
+                  },
+                  ticks: {
+                    maxRotation: isMobile ? 45 : 0,
+                    autoSkip: true,
+                    font: { size: isMobile ? 9 : 11 },
+                  },
                 },
                 y: {
-                  title: { display: true, text: "Nº de personas", font: { size: isMobile ? 10 : 12 } },
+                  title: {
+                    display: true,
+                    text: "Nº de personas",
+                    font: { size: isMobile ? 10 : 12 },
+                  },
                   beginAtZero: true,
                   ticks: { font: { size: isMobile ? 9 : 11 } },
                 },
@@ -631,11 +829,22 @@ export default function BaremoApp({
               },
               scales: {
                 x: {
-                  title: { display: true, text: "Puesto", font: { size: isMobile ? 10 : 12 } },
-                  ticks: { maxTicksLimit: isMobile ? 6 : 12, font: { size: isMobile ? 9 : 11 } },
+                  title: {
+                    display: true,
+                    text: "Puesto",
+                    font: { size: isMobile ? 10 : 12 },
+                  },
+                  ticks: {
+                    maxTicksLimit: isMobile ? 6 : 12,
+                    font: { size: isMobile ? 9 : 11 },
+                  },
                 },
                 y: {
-                  title: { display: true, text: "Puntuación total", font: { size: isMobile ? 10 : 12 } },
+                  title: {
+                    display: true,
+                    text: "Puntuación total",
+                    font: { size: isMobile ? 10 : 12 },
+                  },
                   beginAtZero: true,
                   ticks: { font: { size: isMobile ? 9 : 11 } },
                 },
@@ -648,12 +857,19 @@ export default function BaremoApp({
 
       <footer className="text-xs text-neutral-500 space-y-1">
         <p>
-          Datos: baremo provisional 2026 (25/05/2026) y baremo provisional 2024 (22/05/2024).
-          Finalistas 2024: resolución 23/07/2024 ({meta.plazas2024} plazas).
+          Todos los datos proceden de fuentes oficiales, pero pueden contener
+          errores de transcripción o procesamiento. Consulta siempre los
+          documentos originales.
         </p>
         <p>
-          La probabilidad estimada usa simulación Monte Carlo con exámenes de 2024.
-          No sustituye al baremo definitivo ni al resultado del examen de 2026.
+          Datos: baremo provisional 2026 (25/05/2026) y baremo provisional 2024
+          (22/05/2024). Finalistas 2024: resolución 23/07/2024 (
+          {meta.plazas2024} plazas).
+        </p>
+        <p>
+          La probabilidad estimada usa simulación Monte Carlo con exámenes de
+          2024. No sustituye al baremo definitivo ni al resultado del examen de
+          2026.
         </p>
         <p>
           Made with &lt;3 by{" "}
@@ -679,9 +895,21 @@ function ProbLoadingSkeleton({
   plazas2024: number;
 }) {
   return (
-    <div className="space-y-4 animate-pulse" aria-busy="true" aria-label="Calculando probabilidades">
-      <div className="space-y-3">
-        {[`Con ${plazas2026} plazas (2026)`, `Con ${plazas2024} plazas (como 2024)`].map((label) => (
+    <div
+      className="space-y-4 animate-pulse"
+      aria-busy="true"
+      aria-label="Calculando probabilidades"
+    >
+      <div className="rounded-lg border border-neutral-200 bg-neutral-50/60 p-4 space-y-3">
+        <div className="space-y-1.5">
+          <div className="h-4 w-48 rounded bg-neutral-200" />
+          <div className="h-3 w-full rounded bg-neutral-200" />
+          <div className="h-3 w-5/6 rounded bg-neutral-200" />
+        </div>
+        {[
+          `Con ${plazas2026} plazas (2026)`,
+          `Con ${plazas2024} plazas (como 2024)`,
+        ].map((label) => (
           <div key={label}>
             <div className="flex justify-between mb-1">
               <span className="text-sm text-neutral-400">{label}</span>
@@ -691,27 +919,49 @@ function ProbLoadingSkeleton({
           </div>
         ))}
       </div>
-      <div className="rounded-lg border border-neutral-100 bg-neutral-50 p-4 space-y-3">
-        <div className="h-3 w-2/3 rounded bg-neutral-200" />
-        <div className="grid gap-2 sm:grid-cols-3">
-          {[0, 1, 2].map((i) => (
-            <div key={i} className="space-y-1">
-              <div className="h-3 w-16 rounded bg-neutral-200" />
-              <div className="h-5 w-20 rounded bg-neutral-200" />
-            </div>
-          ))}
+      <div className="rounded-lg border border-neutral-200 bg-neutral-50/60 p-4 space-y-3">
+        <div className="space-y-1.5">
+          <div className="h-4 w-40 rounded bg-neutral-200" />
+          <div className="h-3 w-full rounded bg-neutral-200" />
+        </div>
+        <div>
+          <div className="flex justify-between mb-1">
+            <span className="text-sm text-neutral-400">
+              Obtuvieron plaza en 2024
+            </span>
+            <span className="h-4 w-10 rounded bg-neutral-200" />
+          </div>
+          <div className="h-2.5 rounded-full bg-neutral-200" />
         </div>
       </div>
     </div>
   );
 }
 
-function Stat({ label, value, sub, className }: { label: string; value: string; sub?: string; className?: string }) {
+function Stat({
+  label,
+  value,
+  sub,
+  className,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  className?: string;
+}) {
   return (
-    <div className={`rounded-lg border border-neutral-200 bg-neutral-50 p-2.5 sm:p-3 ${className ?? ""}`}>
-      <div className="text-[10px] sm:text-xs uppercase tracking-wider text-neutral-500">{label}</div>
-      <div className="mt-0.5 sm:mt-1 font-mono text-base sm:text-lg font-semibold tabular-nums">{value}</div>
-      {sub && <div className="text-[10px] sm:text-xs text-neutral-500">{sub}</div>}
+    <div
+      className={`rounded-lg border border-neutral-200 bg-neutral-50 p-2.5 sm:p-3 ${className ?? ""}`}
+    >
+      <div className="text-[10px] sm:text-xs uppercase tracking-wider text-neutral-500">
+        {label}
+      </div>
+      <div className="mt-0.5 sm:mt-1 font-mono text-base sm:text-lg font-semibold tabular-nums">
+        {value}
+      </div>
+      {sub && (
+        <div className="text-[10px] sm:text-xs text-neutral-500">{sub}</div>
+      )}
     </div>
   );
 }
@@ -731,8 +981,12 @@ function CompareStat({
     <div
       className={`rounded-lg border p-2.5 sm:p-3 ${highlight ? "border-emerald-200 bg-emerald-50" : "border-neutral-200 bg-white"}`}
     >
-      <div className="text-[10px] sm:text-xs uppercase tracking-wider text-neutral-500">{label}</div>
-      <div className={`mt-0.5 sm:mt-1 font-mono text-base sm:text-lg font-semibold tabular-nums ${highlight ? "text-emerald-700" : ""}`}>
+      <div className="text-[10px] sm:text-xs uppercase tracking-wider text-neutral-500">
+        {label}
+      </div>
+      <div
+        className={`mt-0.5 sm:mt-1 font-mono text-base sm:text-lg font-semibold tabular-nums ${highlight ? "text-emerald-700" : ""}`}
+      >
         {value}
       </div>
       {sub && <div className="text-xs text-neutral-500">{sub}</div>}
@@ -740,22 +994,79 @@ function CompareStat({
   );
 }
 
-function CategoryDelta({ label, delta }: { label: string; delta: number }) {
-  const sign = delta >= 0 ? "+" : "";
+function pdfHref(path: string, page: number): string {
+  return `${path}#page=${page}`;
+}
+
+function PdfSourceLink({ href, label }: { href: string; label: string }) {
   return (
-    <div className="flex items-center justify-between gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-xs sm:text-sm">
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-3 py-1.5 text-xs text-neutral-700 shadow-sm transition hover:border-neutral-300 hover:bg-neutral-50"
+    >
+      <span aria-hidden="true">↗</span>
+      <span>{label}</span>
+    </a>
+  );
+}
+
+function CategoryScore({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs sm:text-sm">
       <span className="text-neutral-600 min-w-0 leading-snug">{label}</span>
-      <span className={`shrink-0 font-mono font-semibold tabular-nums ${delta > 0 ? "text-emerald-600" : delta < 0 ? "text-red-600" : "text-neutral-400"}`}>
-        {sign}{formatNum(delta, 4)}
+      <span className="shrink-0 font-mono font-semibold tabular-nums text-neutral-900">
+        {formatNum(value, 4)}
       </span>
     </div>
   );
 }
 
-function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
+function CategoryCompareRow({
+  label,
+  v2024,
+  v2026,
+}: {
+  label: string;
+  v2024: number;
+  v2026: number;
+}) {
+  const delta = v2026 - v2024;
+  const sign = delta >= 0 ? "+" : "";
+  return (
+    <tr className="border-b border-neutral-50 last:border-0">
+      <td className="px-3 py-2 text-neutral-600">{label}</td>
+      <td className="px-3 py-2 text-right font-mono tabular-nums text-neutral-700">
+        {formatNum(v2024, 4)}
+      </td>
+      <td className="px-3 py-2 text-right font-mono tabular-nums text-neutral-900">
+        {formatNum(v2026, 4)}
+      </td>
+      <td
+        className={`px-3 py-2 text-right font-mono font-semibold tabular-nums ${
+          delta > 0 ? "text-emerald-600" : delta < 0 ? "text-red-600" : "text-neutral-400"
+        }`}
+      >
+        {sign}
+        {formatNum(delta, 4)}
+      </td>
+    </tr>
+  );
+}
+
+function ChartCard({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="rounded-xl border border-neutral-200 bg-white p-4 sm:p-5 shadow-sm">
-      <h3 className="mb-2 sm:mb-3 text-sm font-medium text-neutral-700">{title}</h3>
+      <h3 className="mb-2 sm:mb-3 text-sm font-medium text-neutral-700">
+        {title}
+      </h3>
       <div className="h-52 sm:h-64 lg:h-80">{children}</div>
     </div>
   );

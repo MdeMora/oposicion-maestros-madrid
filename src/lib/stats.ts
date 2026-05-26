@@ -6,6 +6,30 @@ export function formatNum(n: number, d = 4): string {
   return n.toFixed(d).replace(".", ",");
 }
 
+export type BaremoCategories = {
+  servicios: number;
+  meritos: number;
+  formacion: number;
+};
+
+type Subscore = number | { score: number; count: number };
+
+function subscoreValue(v: Subscore | undefined): number {
+  if (v == null) return 0;
+  return typeof v === "number" ? v : v.score;
+}
+
+/** Top-level baremo blocks: 1 = servicios, 2 = méritos, 3 = formación. */
+export function categoryTotalsFromSubscores(
+  subscores: Record<string, Subscore>,
+): BaremoCategories {
+  return {
+    servicios: subscoreValue(subscores["1"]),
+    meritos: subscoreValue(subscores["2"]),
+    formacion: subscoreValue(subscores["3"]),
+  };
+}
+
 export function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
   const idx = Math.floor(sorted.length * p);
