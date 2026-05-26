@@ -10,6 +10,7 @@
     "build": "astro build",
     "preview": "astro preview",
     "parse": "bun scripts/parse-pdf.ts",
+    "historico": "bun scripts/fetch-historico.ts",
     "astro": "astro"
   },
   "dependencies": {

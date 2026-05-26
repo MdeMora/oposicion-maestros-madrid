@@ -74,6 +74,24 @@ type Meta = {
   baremoPdf2026: string;
 };
 
+export type ConvocatoriaHistorico = {
+  year: number;
+  tipo: "oposicion" | "estabilizacion" | "sin_convocatoria" | "ope";
+  label: string;
+  plazasPrimaria: number | null;
+  plazasPrimariaAmpliadas: number | null;
+  plazasConResultado: number | null;
+  participantes: number | null;
+  baremoMedio: number | null;
+  baremoMediana: number | null;
+  baremoCorte: number | null;
+  notaFinalCorte: number | null;
+  tieneBaremoDetalle: boolean;
+  baremoPdf: string | null;
+  boeRef: string | null;
+  notas: string | null;
+};
+
 function stripAccents(s: string): string {
   return s
     .normalize("NFD")
@@ -229,14 +247,196 @@ function ProbBlock({
   );
 }
 
+function plazasEfectivas(c: ConvocatoriaHistorico): number | null {
+  return (
+    c.plazasConResultado ??
+    c.plazasPrimariaAmpliadas ??
+    c.plazasPrimaria
+  );
+}
+
+function HistoricoConvocatorias({ data }: { data: ConvocatoriaHistorico[] }) {
+  const years = data.map((c) => String(c.year));
+  const plazas = data.map((c) => plazasEfectivas(c));
+  const baremoMedio = data.map((c) => c.baremoMedio);
+  const baremoCorte = data.map((c) => c.baremoCorte);
+  const notaFinal = data.map((c) => c.notaFinalCorte);
+
+  const plazasChart = {
+    labels: years,
+    datasets: [
+      {
+        label: "Plazas Primaria",
+        data: plazas,
+        borderColor: "#171717",
+        backgroundColor: "rgba(23,23,23,0.08)",
+        spanGaps: true,
+        tension: 0.2,
+      },
+    ],
+  };
+
+  const baremoChart = {
+    labels: years,
+    datasets: [
+      {
+        label: "Baremo medio",
+        data: baremoMedio,
+        borderColor: "#2563eb",
+        backgroundColor: "rgba(37,99,235,0.08)",
+        spanGaps: true,
+        tension: 0.2,
+      },
+      {
+        label: "Baremo puesto #plazas",
+        data: baremoCorte,
+        borderColor: "#059669",
+        borderDash: [6, 4],
+        spanGaps: true,
+        tension: 0.2,
+      },
+      {
+        label: "Nota final corte",
+        data: notaFinal,
+        borderColor: "#d97706",
+        borderDash: [2, 2],
+        spanGaps: true,
+        tension: 0.2,
+      },
+    ],
+  };
+
+  const chartOpts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { position: "bottom" as const, labels: { boxWidth: 12, font: { size: 11 } } },
+    },
+    scales: {
+      y: { beginAtZero: true },
+    },
+  };
+
+  return (
+    <section className="space-y-4 sm:space-y-5">
+      <div>
+        <h2 className="text-lg sm:text-xl font-semibold tracking-tight">
+          Histórico convocatorias · Primaria
+        </h2>
+        <p className="text-xs sm:text-sm text-neutral-600 mt-1 leading-relaxed">
+          Plazas según BOE/BOCM. Baremo y cortes calculados cuando hay lista
+          provisional descargable (2024 y 2026 en este proyecto).
+        </p>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <ChartCard title="Plazas convocadas / con resultado">
+          <Line data={plazasChart} options={chartOpts} />
+        </ChartCard>
+        <ChartCard title="Baremo y nota de corte">
+          <Line data={baremoChart} options={chartOpts} />
+        </ChartCard>
+      </div>
+
+      <div className="overflow-x-auto rounded-xl border border-neutral-200 bg-white shadow-sm">
+        <table className="min-w-full text-xs sm:text-sm">
+          <thead>
+            <tr className="border-b border-neutral-200 bg-neutral-50 text-left text-neutral-600">
+              <th className="px-3 py-2 font-medium">Año</th>
+              <th className="px-3 py-2 font-medium">Proceso</th>
+              <th className="px-3 py-2 font-medium text-right">Plazas</th>
+              <th className="px-3 py-2 font-medium text-right">Particip.</th>
+              <th className="px-3 py-2 font-medium text-right">Baremo ∅</th>
+              <th className="px-3 py-2 font-medium text-right">Baremo corte</th>
+              <th className="px-3 py-2 font-medium text-right">Final corte</th>
+              <th className="px-3 py-2 font-medium">Fuente</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.map((c) => {
+              const plazasLabel =
+                c.plazasConResultado != null
+                  ? `${c.plazasConResultado}${c.plazasPrimariaAmpliadas ? ` / ${c.plazasPrimariaAmpliadas} conv.` : ""}`
+                  : c.plazasPrimariaAmpliadas != null
+                    ? `${c.plazasPrimaria}→${c.plazasPrimariaAmpliadas}`
+                    : c.plazasPrimaria != null
+                      ? String(c.plazasPrimaria)
+                      : "—";
+              return (
+                <tr
+                  key={c.year}
+                  className="border-b border-neutral-100 last:border-0"
+                >
+                  <td className="px-3 py-2 font-medium tabular-nums">{c.year}</td>
+                  <td className="px-3 py-2 text-neutral-700">
+                    <div>{c.label}</div>
+                    {c.notas && (
+                      <div className="text-[10px] text-neutral-500 mt-0.5 max-w-xs">
+                        {c.notas}
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono tabular-nums">
+                    {plazasLabel}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono tabular-nums">
+                    {c.participantes?.toLocaleString("es-ES") ?? "—"}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono tabular-nums">
+                    {c.baremoMedio != null ? formatNum(c.baremoMedio, 2) : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono tabular-nums">
+                    {c.baremoCorte != null ? formatNum(c.baremoCorte, 2) : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono tabular-nums">
+                    {c.notaFinalCorte != null
+                      ? formatNum(c.notaFinalCorte, 2)
+                      : "—"}
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="flex flex-wrap gap-1.5">
+                      {c.boeRef && (
+                        <a
+                          href={`https://www.boe.es/diario_boe/txt.php?id=${c.boeRef}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[10px] underline text-neutral-600 hover:text-neutral-900"
+                        >
+                          BOE
+                        </a>
+                      )}
+                      {c.baremoPdf && (
+                        <a
+                          href={c.baremoPdf}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[10px] underline text-neutral-600 hover:text-neutral-900"
+                        >
+                          Baremo
+                        </a>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 export default function BaremoApp({
   rows,
   repeaters,
   meta,
+  historico,
 }: {
   rows: Row[];
   repeaters: Repeater[];
   meta: Meta;
+  historico: ConvocatoriaHistorico[];
 }) {
   const ranked = useMemo(() => rankRows(rows), [rows]);
   const total = ranked.length;
@@ -393,6 +593,8 @@ export default function BaremoApp({
           {meta.repeaters.toLocaleString("es-ES")} repetidores con datos 2024
         </p>
       </header>
+
+      <HistoricoConvocatorias data={historico} />
 
       <section ref={boxRef} className="relative">
         <div className="flex items-baseline justify-between gap-2 mb-1.5">
