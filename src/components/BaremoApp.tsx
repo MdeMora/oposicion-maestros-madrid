@@ -67,12 +67,95 @@ function stripAccents(s: string): string {
   return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebounced(value), delayMs);
+    return () => window.clearTimeout(timer);
+  }, [value, delayMs]);
+  return debounced;
+}
+
+function nameMatchScore(name: string, tokens: string[]): number {
+  let score = 0;
+  for (const token of tokens) {
+    if (name.startsWith(token)) score += 100;
+    else if (name.includes(`, ${token}`)) score += 80;
+    else if (name.includes(` ${token}`)) score += 60;
+    else if (name.includes(token)) score += 20;
+  }
+  return score;
+}
+
+function searchByName(ranked: Ranked[], query: string, fuse: Fuse<Ranked>): Ranked[] {
+  const normalized = stripAccents(query.trim());
+  if (!normalized) return [];
+
+  const tokens = normalized.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return [];
+
+  const substringMatches = ranked.filter((r) => {
+    const name = stripAccents(r.nombre);
+    return tokens.every((token) => name.includes(token));
+  });
+
+  if (substringMatches.length > 0) {
+    return substringMatches.sort((a, b) => {
+      const scoreDiff =
+        nameMatchScore(stripAccents(b.nombre), tokens) -
+        nameMatchScore(stripAccents(a.nombre), tokens);
+      if (scoreDiff !== 0) return scoreDiff;
+      return a.nombre.localeCompare(b.nombre, "es");
+    });
+  }
+
+  return fuse.search(normalized).map((r) => r.item);
+}
+
+function HighlightName({ name, query }: { name: string; query: string }) {
+  const tokens = stripAccents(query.trim())
+    .split(/\s+/)
+    .filter(Boolean);
+  if (tokens.length === 0) return <>{name}</>;
+
+  const pattern = tokens
+    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  const parts = name.split(new RegExp(`(${pattern})`, "gi"));
+
+  return (
+    <>
+      {parts.map((part, i) =>
+        tokens.some((t) => stripAccents(part) === t) ? (
+          <mark key={i} className="rounded-sm bg-amber-100 px-0.5 text-inherit">
+            {part}
+          </mark>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}
+
 function dniSuffix(dni: string): string {
   return dni.replace(/\*/g, "").slice(-4);
 }
 
 function pct(n: number): string {
   return (n * 100).toFixed(1).replace(".", ",") + "%";
+}
+
+function useIsMobile(breakpoint = 640) {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint - 1}px)`);
+    const update = () => setIsMobile(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, [breakpoint]);
+  return isMobile;
 }
 
 function ProbBar({ value, label }: { value: number; label: string }) {
@@ -130,21 +213,27 @@ export default function BaremoApp({
   );
 
   const [query, setQuery] = useState("");
+  const debouncedQuery = useDebouncedValue(query, 1000);
   const [selected, setSelected] = useState<Ranked | null>(null);
   const [open, setOpen] = useState(false);
+  const [probability, setProbability] = useState<ProbabilityResult | null>(null);
+  const [probLoading, setProbLoading] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
+  const isMobile = useIsMobile();
+
+  const isSearching = query.trim() !== debouncedQuery.trim() && query.trim().length > 0;
 
   const matches = useMemo(() => {
-    if (!query.trim()) return [];
-    return fuse.search(stripAccents(query)).slice(0, 8).map((r) => r.item);
-  }, [query, fuse]);
+    if (!debouncedQuery.trim()) return [];
+    return searchByName(ranked, debouncedQuery, fuse);
+  }, [debouncedQuery, fuse, ranked]);
 
   useEffect(() => {
-    const h = (e: MouseEvent) => {
+    const h = (e: PointerEvent) => {
       if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
     };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
+    document.addEventListener("pointerdown", h);
+    return () => document.removeEventListener("pointerdown", h);
   }, []);
 
   const selectedRepeater = useMemo(() => {
@@ -167,18 +256,39 @@ export default function BaremoApp({
     return { betterCount, worseCount, tiedCount, percentile };
   }, [selected, ranked, total]);
 
-  const probability = useMemo((): ProbabilityResult | null => {
-    if (!selected) return null;
-    const empirical = empiricalPlazaRate(selected.total, repeaters);
-    return estimateProbability(
-      selected.total,
-      meta.examScores2024,
-      allBaremoTotals,
-      meta.plazas2026,
-      meta.plazas2024,
-      meta.cutoffFinal2024,
-      empirical,
-    );
+  useEffect(() => {
+    if (!selected) {
+      setProbability(null);
+      setProbLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setProbability(null);
+    setProbLoading(true);
+
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      const empirical = empiricalPlazaRate(selected.total, repeaters);
+      const result = estimateProbability(
+        selected.total,
+        meta.examScores2024,
+        allBaremoTotals,
+        meta.plazas2026,
+        meta.plazas2024,
+        meta.cutoffFinal2024,
+        empirical,
+      );
+      if (!cancelled) {
+        setProbability(result);
+        setProbLoading(false);
+      }
+    }, 0);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [selected, repeaters, meta, allBaremoTotals]);
 
   const histogram = useMemo(() => {
@@ -200,12 +310,12 @@ export default function BaremoApp({
   const rank343Score = ranked[Math.min(meta.plazas2024 - 1, ranked.length - 1)]?.total;
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-8 space-y-8">
-      <header className="space-y-2">
-        <h1 className="text-3xl font-semibold tracking-tight">
+    <div className="mx-auto max-w-6xl px-3 py-5 sm:px-4 sm:py-8 space-y-6 sm:space-y-8">
+      <header className="space-y-1.5 sm:space-y-2">
+        <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight leading-tight">
           Baremo Provisional 2026 · Maestros · Primaria
         </h1>
-        <p className="text-sm text-neutral-600">
+        <p className="text-xs sm:text-sm text-neutral-600 leading-relaxed">
           Acceso 1 y 2 (turno libre) · {total.toLocaleString("es-ES")} participantes ·{" "}
           {meta.plazas2026} plazas · {meta.repeaters.toLocaleString("es-ES")} repetidores con datos 2024
         </p>
@@ -222,25 +332,27 @@ export default function BaremoApp({
           }}
           onFocus={() => setOpen(true)}
           placeholder="Apellidos, Nombre"
-          className="w-full rounded-lg border border-neutral-300 bg-white px-3.5 py-2.5 text-sm shadow-sm focus:border-neutral-900 focus:outline-none focus:ring-2 focus:ring-neutral-900/10"
+          className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2.5 text-base sm:text-sm shadow-sm focus:border-neutral-900 focus:outline-none focus:ring-2 focus:ring-neutral-900/10"
         />
         {open && matches.length > 0 && (
           <ul className="absolute z-10 mt-1 max-h-72 w-full overflow-auto rounded-lg border border-neutral-200 bg-white shadow-lg">
             {matches.map((m) => (
                 <li
                   key={m.idx}
-                  onMouseDown={(e) => {
+                  onPointerDown={(e) => {
                     e.preventDefault();
                     setSelected(m);
                     setQuery(m.nombre);
                     setOpen(false);
                   }}
-                  className="cursor-pointer px-3.5 py-2 text-sm hover:bg-neutral-100"
+                  className="cursor-pointer px-3 py-2.5 text-sm hover:bg-neutral-100 active:bg-neutral-100"
                 >
-                  <span className="font-medium">{m.nombre}</span>
-                  <span className="float-right text-neutral-500">
-                    #{m.rank} · {formatNum(m.total, 4)}
-                  </span>
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="font-medium min-w-0 flex-1 leading-snug">{m.nombre}</span>
+                    <span className="shrink-0 text-xs sm:text-sm text-neutral-500 tabular-nums">
+                      #{m.rank} · {formatNum(m.total, 4)}
+                    </span>
+                  </div>
                 </li>
               ))}
           </ul>
@@ -248,25 +360,25 @@ export default function BaremoApp({
       </section>
 
       {selected && stats && (
-        <section className="rounded-xl border border-neutral-200 bg-white p-6 shadow-sm space-y-6">
-          <div className="flex items-baseline justify-between flex-wrap gap-4">
-            <div>
+        <section className="rounded-xl border border-neutral-200 bg-white p-4 sm:p-6 shadow-sm space-y-5 sm:space-y-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4">
+            <div className="min-w-0">
               <div className="text-xs uppercase tracking-wider text-neutral-500">
                 Resultado seleccionado
               </div>
-              <h2 className="text-xl font-semibold mt-0.5">{selected.nombre}</h2>
+              <h2 className="text-lg sm:text-xl font-semibold mt-0.5 break-words">{selected.nombre}</h2>
             </div>
-            <div className="text-right">
+            <div className="sm:text-right shrink-0">
               <div className="text-xs uppercase tracking-wider text-neutral-500">
                 Puntuación total 2026
               </div>
-              <div className="text-3xl font-mono font-semibold">
+              <div className="text-2xl sm:text-3xl font-mono font-semibold tabular-nums">
                 {formatNum(selected.total, 4)}
               </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 sm:gap-4">
             <Stat label="Puesto 2026" value={`#${selected.rank}`} />
             <Stat label="Percentil" value={stats.percentile.toFixed(1).replace(".", ",") + "%"} />
             <Stat
@@ -279,11 +391,11 @@ export default function BaremoApp({
               value={stats.worseCount.toLocaleString("es-ES")}
               sub={`${((stats.worseCount / (total - 1 || 1)) * 100).toFixed(1).replace(".", ",")}%`}
             />
-            <Stat label="Empatados" value={stats.tiedCount.toLocaleString("es-ES")} />
+            <Stat label="Empatados" value={stats.tiedCount.toLocaleString("es-ES")} className="col-span-2 sm:col-span-1" />
           </div>
 
           <div
-            className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm ${
+            className={`inline-flex items-start sm:items-center gap-2 rounded-full px-3 py-1.5 text-xs sm:text-sm leading-snug ${
               selected.rank <= meta.plazas2026
                 ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
                 : "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
@@ -298,15 +410,15 @@ export default function BaremoApp({
       )}
 
       {selected && selectedRepeater && (
-        <section className="rounded-xl border border-blue-200 bg-blue-50/40 p-6 shadow-sm space-y-5">
-          <div className="flex items-center gap-2">
+        <section className="rounded-xl border border-blue-200 bg-blue-50/40 p-4 sm:p-6 shadow-sm space-y-4 sm:space-y-5">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">
               Repitió oposición
             </span>
             <h3 className="text-sm font-medium text-blue-900">Evolución 2024 → 2026</h3>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-3 sm:gap-4 sm:grid-cols-3">
             <CompareStat
               label="Baremo 2024"
               value={formatNum(selectedRepeater.baremo2024, 4)}
@@ -355,8 +467,8 @@ export default function BaremoApp({
         </section>
       )}
 
-      {selected && probability && (
-        <section className="rounded-xl border border-neutral-200 bg-white p-6 shadow-sm space-y-5">
+      {selected && (probability || probLoading) && (
+        <section className="rounded-xl border border-neutral-200 bg-white p-4 sm:p-6 shadow-sm space-y-4 sm:space-y-5">
           <div>
             <h3 className="text-sm font-medium text-neutral-800">Estimación de probabilidad de plaza</h3>
             <p className="mt-1 text-xs text-neutral-500">
@@ -365,42 +477,48 @@ export default function BaremoApp({
             </p>
           </div>
 
-          <div className="space-y-3">
-            <ProbBar value={probability.p150} label={`Con ${meta.plazas2026} plazas (2026)`} />
-            <ProbBar value={probability.p343} label={`Con ${meta.plazas2024} plazas (como 2024)`} />
-            {probability.empirical != null && (
-              <ProbBar
-                value={probability.empirical}
-                label="Referencia empírica (repetidores con baremo similar en 2024)"
-              />
-            )}
-          </div>
+          {probLoading || !probability ? (
+            <ProbLoadingSkeleton plazas2026={meta.plazas2026} plazas2024={meta.plazas2024} />
+          ) : (
+            <>
+              <div className="space-y-3">
+                <ProbBar value={probability.p150} label={`Con ${meta.plazas2026} plazas (2026)`} />
+                <ProbBar value={probability.p343} label={`Con ${meta.plazas2024} plazas (como 2024)`} />
+                {probability.empirical != null && (
+                  <ProbBar
+                    value={probability.empirical}
+                    label="Referencia empírica (repetidores con baremo similar en 2024)"
+                  />
+                )}
+              </div>
 
-          <div className="rounded-lg border border-neutral-100 bg-neutral-50 p-4">
-            <div className="text-xs uppercase tracking-wider text-neutral-500 mb-2">
-              Puntos de examen necesarios (referencia corte 2024: {formatNum(meta.cutoffFinal2024, 4)})
-            </div>
-            <div className="grid gap-2 sm:grid-cols-3 text-sm">
-              <div>
-                <span className="text-neutral-500">Optimista</span>
-                <div className="font-mono font-semibold">{formatNum(probability.examNeeded.optimistic, 2)} pts</div>
+              <div className="rounded-lg border border-neutral-100 bg-neutral-50 p-4">
+                <div className="text-xs uppercase tracking-wider text-neutral-500 mb-2">
+                  Puntos de examen necesarios (referencia corte 2024: {formatNum(meta.cutoffFinal2024, 4)})
+                </div>
+                <div className="grid gap-2 sm:grid-cols-3 text-sm">
+                  <div>
+                    <span className="text-neutral-500">Optimista</span>
+                    <div className="font-mono font-semibold">{formatNum(probability.examNeeded.optimistic, 2)} pts</div>
+                  </div>
+                  <div>
+                    <span className="text-neutral-500">Mediano</span>
+                    <div className="font-mono font-semibold">{formatNum(probability.examNeeded.median, 2)} pts</div>
+                  </div>
+                  <div>
+                    <span className="text-neutral-500">Exigente</span>
+                    <div className="font-mono font-semibold">{formatNum(probability.examNeeded.pessimistic, 2)} pts</div>
+                  </div>
+                </div>
               </div>
-              <div>
-                <span className="text-neutral-500">Mediano</span>
-                <div className="font-mono font-semibold">{formatNum(probability.examNeeded.median, 2)} pts</div>
-              </div>
-              <div>
-                <span className="text-neutral-500">Exigente</span>
-                <div className="font-mono font-semibold">{formatNum(probability.examNeeded.pessimistic, 2)} pts</div>
-              </div>
-            </div>
-          </div>
 
-          <p className="text-xs text-neutral-400">
-            Baremo solo no decide la plaza: en 2024 el corte final fue {formatNum(meta.cutoffFinal2024, 4)} pts
-            (baremo del puesto #150: {rank343Score ? formatNum(rank343Score, 4) : "—"}). Muchos seleccionados
-            tenían baremo bajo pero examen alto.
-          </p>
+              <p className="text-xs text-neutral-400">
+                Baremo solo no decide la plaza: en 2024 el corte final fue {formatNum(meta.cutoffFinal2024, 4)} pts
+                (baremo del puesto #150: {rank343Score ? formatNum(rank343Score, 4) : "—"}). Muchos seleccionados
+                tenían baremo bajo pero examen alto.
+              </p>
+            </>
+          )}
         </section>
       )}
 
@@ -425,8 +543,15 @@ export default function BaremoApp({
               maintainAspectRatio: false,
               plugins: { legend: { display: false } },
               scales: {
-                x: { title: { display: true, text: "Puntuación total" }, ticks: { maxRotation: 0, autoSkip: true } },
-                y: { title: { display: true, text: "Nº de personas" }, beginAtZero: true },
+                x: {
+                  title: { display: true, text: "Puntuación total", font: { size: isMobile ? 10 : 12 } },
+                  ticks: { maxRotation: isMobile ? 45 : 0, autoSkip: true, font: { size: isMobile ? 9 : 11 } },
+                },
+                y: {
+                  title: { display: true, text: "Nº de personas", font: { size: isMobile ? 10 : 12 } },
+                  beginAtZero: true,
+                  ticks: { font: { size: isMobile ? 9 : 11 } },
+                },
               },
             }}
           />
@@ -484,8 +609,8 @@ export default function BaremoApp({
                         position: "start",
                         backgroundColor: "#059669",
                         color: "#fff",
-                        font: { size: 11 },
-                        padding: 4,
+                        font: { size: isMobile ? 9 : 11 },
+                        padding: isMobile ? 2 : 4,
                       },
                     },
                   },
@@ -498,8 +623,15 @@ export default function BaremoApp({
                 },
               },
               scales: {
-                x: { title: { display: true, text: "Puesto" }, ticks: { maxTicksLimit: 12 } },
-                y: { title: { display: true, text: "Puntuación total" }, beginAtZero: true },
+                x: {
+                  title: { display: true, text: "Puesto", font: { size: isMobile ? 10 : 12 } },
+                  ticks: { maxTicksLimit: isMobile ? 6 : 12, font: { size: isMobile ? 9 : 11 } },
+                },
+                y: {
+                  title: { display: true, text: "Puntuación total", font: { size: isMobile ? 10 : 12 } },
+                  beginAtZero: true,
+                  ticks: { font: { size: isMobile ? 9 : 11 } },
+                },
               },
               animation: false,
             }}
@@ -521,12 +653,47 @@ export default function BaremoApp({
   );
 }
 
-function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function ProbLoadingSkeleton({
+  plazas2026,
+  plazas2024,
+}: {
+  plazas2026: number;
+  plazas2024: number;
+}) {
   return (
-    <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
-      <div className="text-xs uppercase tracking-wider text-neutral-500">{label}</div>
-      <div className="mt-1 font-mono text-lg font-semibold">{value}</div>
-      {sub && <div className="text-xs text-neutral-500">{sub}</div>}
+    <div className="space-y-4 animate-pulse" aria-busy="true" aria-label="Calculando probabilidades">
+      <div className="space-y-3">
+        {[`Con ${plazas2026} plazas (2026)`, `Con ${plazas2024} plazas (como 2024)`].map((label) => (
+          <div key={label}>
+            <div className="flex justify-between mb-1">
+              <span className="text-sm text-neutral-400">{label}</span>
+              <span className="h-4 w-10 rounded bg-neutral-200" />
+            </div>
+            <div className="h-2.5 rounded-full bg-neutral-200" />
+          </div>
+        ))}
+      </div>
+      <div className="rounded-lg border border-neutral-100 bg-neutral-50 p-4 space-y-3">
+        <div className="h-3 w-2/3 rounded bg-neutral-200" />
+        <div className="grid gap-2 sm:grid-cols-3">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="space-y-1">
+              <div className="h-3 w-16 rounded bg-neutral-200" />
+              <div className="h-5 w-20 rounded bg-neutral-200" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value, sub, className }: { label: string; value: string; sub?: string; className?: string }) {
+  return (
+    <div className={`rounded-lg border border-neutral-200 bg-neutral-50 p-2.5 sm:p-3 ${className ?? ""}`}>
+      <div className="text-[10px] sm:text-xs uppercase tracking-wider text-neutral-500">{label}</div>
+      <div className="mt-0.5 sm:mt-1 font-mono text-base sm:text-lg font-semibold tabular-nums">{value}</div>
+      {sub && <div className="text-[10px] sm:text-xs text-neutral-500">{sub}</div>}
     </div>
   );
 }
@@ -544,10 +711,10 @@ function CompareStat({
 }) {
   return (
     <div
-      className={`rounded-lg border p-3 ${highlight ? "border-emerald-200 bg-emerald-50" : "border-neutral-200 bg-white"}`}
+      className={`rounded-lg border p-2.5 sm:p-3 ${highlight ? "border-emerald-200 bg-emerald-50" : "border-neutral-200 bg-white"}`}
     >
-      <div className="text-xs uppercase tracking-wider text-neutral-500">{label}</div>
-      <div className={`mt-1 font-mono text-lg font-semibold ${highlight ? "text-emerald-700" : ""}`}>
+      <div className="text-[10px] sm:text-xs uppercase tracking-wider text-neutral-500">{label}</div>
+      <div className={`mt-0.5 sm:mt-1 font-mono text-base sm:text-lg font-semibold tabular-nums ${highlight ? "text-emerald-700" : ""}`}>
         {value}
       </div>
       {sub && <div className="text-xs text-neutral-500">{sub}</div>}
@@ -558,9 +725,9 @@ function CompareStat({
 function CategoryDelta({ label, delta }: { label: string; delta: number }) {
   const sign = delta >= 0 ? "+" : "";
   return (
-    <div className="flex items-center justify-between rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm">
-      <span className="text-neutral-600">{label}</span>
-      <span className={`font-mono font-semibold ${delta > 0 ? "text-emerald-600" : delta < 0 ? "text-red-600" : "text-neutral-400"}`}>
+    <div className="flex items-center justify-between gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-xs sm:text-sm">
+      <span className="text-neutral-600 min-w-0 leading-snug">{label}</span>
+      <span className={`shrink-0 font-mono font-semibold tabular-nums ${delta > 0 ? "text-emerald-600" : delta < 0 ? "text-red-600" : "text-neutral-400"}`}>
         {sign}{formatNum(delta, 4)}
       </span>
     </div>
@@ -569,9 +736,9 @@ function CategoryDelta({ label, delta }: { label: string; delta: number }) {
 
 function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
-      <h3 className="mb-3 text-sm font-medium text-neutral-700">{title}</h3>
-      <div className="h-80">{children}</div>
+    <div className="rounded-xl border border-neutral-200 bg-white p-4 sm:p-5 shadow-sm">
+      <h3 className="mb-2 sm:mb-3 text-sm font-medium text-neutral-700">{title}</h3>
+      <div className="h-52 sm:h-64 lg:h-80">{children}</div>
     </div>
   );
 }
