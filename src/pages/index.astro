@@ -4,6 +4,7 @@ import { getCollection } from "astro:content";
 import BaremoApp from "../components/BaremoApp.tsx";
 import repeatersData from "../data/repeaters.json";
 import metaData from "../data/meta.json";
+import historicoData from "../data/convocatorias-historico.json";
 import { categoryTotalsFromSubscores } from "../lib/stats";
 import "../styles/global.css";
 
@@ -27,7 +28,7 @@ const rows = entries.map((e) => ({
     <title>Baremo Maestros Primaria 2026 · Madrid</title>
   </head>
   <body class="bg-neutral-50 text-neutral-900 min-h-screen antialiased">
-    <BaremoApp rows={rows} repeaters={repeatersData} meta={metaData} client:load />
+    <BaremoApp rows={rows} repeaters={repeatersData} meta={metaData} historico={historicoData} client:load />
     <Analytics />
   </body>
 </html>
