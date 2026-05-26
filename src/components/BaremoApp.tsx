@@ -276,7 +276,6 @@ export default function BaremoApp({
         allBaremoTotals,
         meta.plazas2026,
         meta.plazas2024,
-        meta.cutoffFinal2024,
         empirical,
       );
       if (!cancelled) {
@@ -322,7 +321,19 @@ export default function BaremoApp({
       </header>
 
       <section ref={boxRef} className="relative">
-        <label className="block text-sm font-medium mb-1.5">Buscar por nombre</label>
+        <div className="flex items-baseline justify-between gap-2 mb-1.5">
+          <label className="block text-sm font-medium">Buscar por nombre</label>
+          {isSearching && (
+            <span className="text-xs text-neutral-400 animate-pulse">Buscando…</span>
+          )}
+          {!isSearching && debouncedQuery.trim() && open && (
+            <span className="text-xs text-neutral-500 tabular-nums">
+              {matches.length === 0
+                ? "Sin resultados"
+                : `${matches.length.toLocaleString("es-ES")} resultado${matches.length === 1 ? "" : "s"}`}
+            </span>
+          )}
+        </div>
         <input
           type="text"
           value={query}
@@ -331,31 +342,47 @@ export default function BaremoApp({
             setOpen(true);
           }}
           onFocus={() => setOpen(true)}
-          placeholder="Apellidos, Nombre"
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setOpen(false);
+          }}
+          placeholder="Apellidos, nombre… (p. ej. bellido cristina)"
           className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2.5 text-base sm:text-sm shadow-sm focus:border-neutral-900 focus:outline-none focus:ring-2 focus:ring-neutral-900/10"
+          aria-autocomplete="list"
+          aria-expanded={open && (isSearching || matches.length > 0)}
         />
-        {open && matches.length > 0 && (
-          <ul className="absolute z-10 mt-1 max-h-72 w-full overflow-auto rounded-lg border border-neutral-200 bg-white shadow-lg">
+        {open && debouncedQuery.trim() && !isSearching && matches.length > 0 && (
+          <ul
+            className="absolute z-10 mt-1 max-h-96 w-full overflow-auto rounded-lg border border-neutral-200 bg-white shadow-lg"
+            role="listbox"
+          >
             {matches.map((m) => (
-                <li
-                  key={m.idx}
-                  onPointerDown={(e) => {
-                    e.preventDefault();
-                    setSelected(m);
-                    setQuery(m.nombre);
-                    setOpen(false);
-                  }}
-                  className="cursor-pointer px-3 py-2.5 text-sm hover:bg-neutral-100 active:bg-neutral-100"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <span className="font-medium min-w-0 flex-1 leading-snug">{m.nombre}</span>
-                    <span className="shrink-0 text-xs sm:text-sm text-neutral-500 tabular-nums">
-                      #{m.rank} · {formatNum(m.total, 4)}
-                    </span>
-                  </div>
-                </li>
-              ))}
+              <li
+                key={m.idx}
+                role="option"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  setSelected(m);
+                  setQuery(m.nombre);
+                  setOpen(false);
+                }}
+                className="cursor-pointer px-3 py-2.5 text-sm hover:bg-neutral-100 active:bg-neutral-100 border-b border-neutral-50 last:border-b-0"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <span className="font-medium min-w-0 flex-1 leading-snug">
+                    <HighlightName name={m.nombre} query={debouncedQuery} />
+                  </span>
+                  <span className="shrink-0 text-xs sm:text-sm text-neutral-500 tabular-nums">
+                    #{m.rank} · {formatNum(m.total, 4)}
+                  </span>
+                </div>
+              </li>
+            ))}
           </ul>
+        )}
+        {open && debouncedQuery.trim() && !isSearching && matches.length === 0 && (
+          <div className="absolute z-10 mt-1 w-full rounded-lg border border-neutral-200 bg-white px-3 py-4 text-sm text-neutral-500 shadow-lg">
+            No hay coincidencias para «{debouncedQuery.trim()}». Prueba con apellidos o menos palabras.
+          </div>
         )}
       </section>
 
@@ -490,26 +517,6 @@ export default function BaremoApp({
                     label="Referencia empírica (repetidores con baremo similar en 2024)"
                   />
                 )}
-              </div>
-
-              <div className="rounded-lg border border-neutral-100 bg-neutral-50 p-4">
-                <div className="text-xs uppercase tracking-wider text-neutral-500 mb-2">
-                  Puntos de examen necesarios (referencia corte 2024: {formatNum(meta.cutoffFinal2024, 4)})
-                </div>
-                <div className="grid gap-2 sm:grid-cols-3 text-sm">
-                  <div>
-                    <span className="text-neutral-500">Optimista</span>
-                    <div className="font-mono font-semibold">{formatNum(probability.examNeeded.optimistic, 2)} pts</div>
-                  </div>
-                  <div>
-                    <span className="text-neutral-500">Mediano</span>
-                    <div className="font-mono font-semibold">{formatNum(probability.examNeeded.median, 2)} pts</div>
-                  </div>
-                  <div>
-                    <span className="text-neutral-500">Exigente</span>
-                    <div className="font-mono font-semibold">{formatNum(probability.examNeeded.pessimistic, 2)} pts</div>
-                  </div>
-                </div>
               </div>
 
               <p className="text-xs text-neutral-400">
@@ -647,6 +654,17 @@ export default function BaremoApp({
         <p>
           La probabilidad estimada usa simulación Monte Carlo con exámenes de 2024.
           No sustituye al baremo definitivo ni al resultado del examen de 2026.
+        </p>
+        <p>
+          Made with &lt;3 by{" "}
+          <a
+            href="https://x.com/mdemora_dev"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:text-neutral-700"
+          >
+            @mdemora_dev
+          </a>
         </p>
       </footer>
     </div>

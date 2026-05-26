@@ -32,7 +32,6 @@ export function rankRows<T extends { total: number }>(rows: T[]): Ranked<T>[] {
 export type ProbabilityResult = {
   p150: number;
   p343: number;
-  examNeeded: { optimistic: number; median: number; pessimistic: number };
   empirical: number | null;
 };
 
@@ -47,46 +46,64 @@ function mulberry32(seed: number) {
   };
 }
 
+/** k-th largest value (k=0 → max), in-place quickselect. */
+function kthLargest(arr: number[], k: number): number {
+  let left = 0;
+  let right = arr.length - 1;
+  while (left < right) {
+    const pivot = arr[right];
+    let store = left;
+    for (let i = left; i < right; i++) {
+      if (arr[i] > pivot) {
+        const tmp = arr[store];
+        arr[store] = arr[i];
+        arr[i] = tmp;
+        store++;
+      }
+    }
+    const tmp = arr[store];
+    arr[store] = arr[right];
+    arr[right] = tmp;
+    if (store === k) return arr[k];
+    if (store < k) left = store + 1;
+    else right = store - 1;
+  }
+  return arr[k];
+}
+
 export function estimateProbability(
   baremo2026: number,
   examScores2024: number[],
   allBaremo2026: number[],
   plazas150: number,
   plazas343: number,
-  cutoffFinal2024: number,
   empiricalRate: number | null,
   trials = 4000,
 ): ProbabilityResult {
-  const sortedExams = [...examScores2024].sort((a, b) => a - b);
   const rng = mulberry32(Math.round(baremo2026 * 10000));
 
-  function simulate(plazas: number): number {
+  const finals = new Array<number>(allBaremo2026.length);
+  const cutoffIdx = Math.min(plazas150 - 1, finals.length - 1);
+  const cutoffIdx343 = Math.min(plazas343 - 1, finals.length - 1);
+
+  function simulate(k: number): number {
     let wins = 0;
     for (let t = 0; t < trials; t++) {
       const myExam = examScores2024[Math.floor(rng() * examScores2024.length)];
       const myFinal = baremo2026 + myExam;
 
-      const finals = new Array(allBaremo2026.length);
       for (let i = 0; i < allBaremo2026.length; i++) {
         finals[i] = allBaremo2026[i] + examScores2024[Math.floor(rng() * examScores2024.length)];
       }
-      finals.sort((a, b) => b - a);
-      const cutoff = finals[Math.min(plazas - 1, finals.length - 1)];
+      const cutoff = kthLargest(finals, k);
       if (myFinal >= cutoff) wins++;
     }
     return wins / trials;
   }
 
-  const examNeeded = {
-    optimistic: Math.max(0, cutoffFinal2024 - baremo2026 - percentile(sortedExams, 0.75)),
-    median: Math.max(0, cutoffFinal2024 - baremo2026 - percentile(sortedExams, 0.5)),
-    pessimistic: Math.max(0, cutoffFinal2024 - baremo2026 - percentile(sortedExams, 0.25)),
-  };
-
   return {
-    p150: simulate(plazas150),
-    p343: simulate(plazas343),
-    examNeeded,
+    p150: simulate(cutoffIdx),
+    p343: simulate(cutoffIdx343),
     empirical: empiricalRate,
   };
 }
